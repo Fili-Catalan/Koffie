@@ -1,0 +1,9 @@
+# Files and directories that Git should ignore.
+
+# Environments
+.env
+venv/
+.DS_Store
+backend/venv/
+__pycache__/
+*.pyc
