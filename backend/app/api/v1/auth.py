@@ -4,6 +4,8 @@ from flask import jsonify
 import jwt
 import os
 import datetime
+from app.api.v1.decorators import jwt_required
+import secrets
 
 """
 
@@ -57,6 +59,7 @@ def login():
     from app import db
     from app.models.user import User
     from app import bcrypt
+    from app import redis_client
 
     data = request.get_json()
 
@@ -78,9 +81,49 @@ def login():
     password_check = bcrypt.check_password_hash(password_hash, password)
     if not password_check:  return jsonify({'error':'Invalid email or password'}), 401
 
+    refresh_token = secrets.token_urlsafe(32)
+    redis_client.set(f'refresh:{refresh_token}', str(user.id), ex = datetime.timedelta(days=7))
+
     # Return JWT.
     return jsonify({'token':jwt.encode(
-        {'user_id': str(user.id), 'exp':datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=24)},
-        os.environ.get('SECRET_KEY'),
-        algorithm='HS256'
-    )}), 200
+                            {'user_id': str(user.id), 'exp':datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)},
+                            os.environ.get('SECRET_KEY'),
+                            algorithm='HS256'
+                            ),
+                    'refresh_token': refresh_token
+                    }), 200
+
+@auth_bp.route('/me', methods=['GET'])
+@jwt_required
+def me(user_id):
+    return jsonify({'success': f'{user_id} is valid'}), 200
+
+@auth_bp.route('/refresh', methods=['POST'])
+def refresh():
+
+    from app import redis_client
+
+    data = request.get_json()
+    
+    # Check that all inputs are provided.
+    refresh_token = data.get('refresh_token')
+
+    # Get token from Redis.
+    user_id = redis_client.get(f'refresh:{refresh_token}')
+    if not user_id: return jsonify({'error':'Invalid token'}), 401
+
+    # Delete the old refresh token.
+    redis_client.delete(f'refresh:{refresh_token}')
+
+    # Create a new refresh token.
+    new_refresh_token = secrets.token_urlsafe(32)
+    redis_client.set(f'refresh:{new_refresh_token}', user_id, ex=datetime.timedelta(days=7))
+
+    # Return JWT.
+    return jsonify({'token':jwt.encode(
+                            {'user_id': user_id, 'exp':datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)},
+                            os.environ.get('SECRET_KEY'),
+                            algorithm='HS256'
+                            ),
+                    'refresh_token': new_refresh_token
+                    }), 200
